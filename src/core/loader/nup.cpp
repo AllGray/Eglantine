@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
 #include "core/loader/nup.h"
 
 #include <algorithm>
@@ -257,9 +258,29 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
         update_index ? nup->GetRomFSDir(*update_index) : FileSys::VirtualDir{};
     // A standalone update carries the complete merged tree; a base+update pair
     // overlays the update onto the base (SPEC §4.1.4).
-    const auto merged = FileSys::NupContainer::MergeShadowDirs(base_romfs, update_romfs);
+    auto merged = FileSys::NupContainer::MergeShadowDirs(base_romfs, update_romfs);
     if (merged == nullptr) {
         return ResultStatus::ErrorNoRomFS;
+    }
+    // Experiment (EGL_MERGE_DLC=1): also lay the add-on RomFS trees over the program RomFS, for
+    // games that find their add-on assets by path instead of through the AoC service.
+    if (const char* merge_dlc = std::getenv("EGL_MERGE_DLC");
+        merge_dlc != nullptr && merge_dlc[0] == '1') {
+        const auto& packages = nup->GetPackages();
+        for (std::size_t i = 0; i < packages.size(); ++i) {
+            if (packages[i].kind != NupContainer::PackageKind::Addon) {
+                continue;
+            }
+            const auto addon_dir = nup->GetRomFSDir(i);
+            if (addon_dir == nullptr) {
+                continue;
+            }
+            if (auto with_addon = FileSys::NupContainer::MergeShadowDirs(merged, addon_dir)) {
+                LOG_INFO(Loader, "Merged NUP add-on {:016X} into the program RomFS",
+                         packages[i].title_id);
+                merged = std::move(with_addon);
+            }
+        }
     }
     out_file = FileSys::CreateRomFS(merged);
     if (out_file == nullptr) {
