@@ -265,7 +265,10 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     // Experiment (EGL_MERGE_DLC=1): also lay the add-on RomFS trees over the program RomFS, for
     // games that find their add-on assets by path instead of through the AoC service.
     if (const char* merge_dlc = std::getenv("EGL_MERGE_DLC");
-        merge_dlc != nullptr && merge_dlc[0] == '1') {
+        merge_dlc != nullptr && (merge_dlc[0] == '1' || merge_dlc[0] == '2')) {
+        // 1: add-on files replace program files with the same path; 2: program files win and the
+        // add-on only contributes paths the program does not have.
+        const bool program_wins = merge_dlc[0] == '2';
         const auto& packages = nup->GetPackages();
         for (std::size_t i = 0; i < packages.size(); ++i) {
             if (packages[i].kind != NupContainer::PackageKind::Addon) {
@@ -275,7 +278,9 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
             if (addon_dir == nullptr) {
                 continue;
             }
-            if (auto with_addon = FileSys::NupContainer::MergeShadowDirs(merged, addon_dir)) {
+            if (auto with_addon = program_wins
+                                      ? FileSys::NupContainer::MergeShadowDirs(addon_dir, merged)
+                                      : FileSys::NupContainer::MergeShadowDirs(merged, addon_dir)) {
                 LOG_INFO(Loader, "Merged NUP add-on {:016X} into the program RomFS",
                          packages[i].title_id);
                 merged = std::move(with_addon);
