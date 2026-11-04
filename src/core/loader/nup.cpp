@@ -6,6 +6,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "common/logging.h"
 #include "common/string_util.h"
@@ -15,6 +19,7 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
+#include "core/file_sys/vfs/vfs_offset.h"
 #include "core/file_sys/vfs/vfs_vector.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -250,6 +255,36 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
     return nup->VerifyIntegrity(std::move(progress_callback));
 }
 
+namespace {
+
+/// Experiment (EGL_MERGE_DLC=4): a copy of `dir` holding only the Switch 2 files (".Nin_Ounce_NVN2.")
+/// under the Switch 1 name (".Nin_NX_NVN.") that the program asks for.
+FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir) {
+    constexpr std::string_view from = ".Nin_Ounce_NVN2.";
+    constexpr std::string_view to = ".Nin_NX_NVN.";
+    std::vector<FileSys::VirtualFile> files;
+    std::vector<FileSys::VirtualDir> dirs;
+    for (const auto& file : dir->GetFiles()) {
+        std::string name = file->GetName();
+        const auto pos = name.find(from);
+        if (pos == std::string::npos) {
+            continue;
+        }
+        name.replace(pos, from.size(), to);
+        files.push_back(std::make_shared<FileSys::OffsetVfsFile>(file, file->GetSize(), 0, name));
+    }
+    for (const auto& sub : dir->GetSubdirectories()) {
+        auto renamed = RenameOunceFiles(sub);
+        if (!renamed->GetFiles().empty() || !renamed->GetSubdirectories().empty()) {
+            dirs.push_back(std::move(renamed));
+        }
+    }
+    return std::make_shared<FileSys::VectorVfsDirectory>(std::move(files), std::move(dirs),
+                                                         dir->GetName());
+}
+
+} // namespace
+
 ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     const auto base_index = nup->FindBasePackage();
     const auto base_romfs = base_index ? nup->GetRomFSDir(*base_index) : FileSys::VirtualDir{};
@@ -261,7 +296,8 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     // Experiment (EGL_MERGE_DLC=3): layer the program as base < add-ons < update, the way an
     // upgrade pack is assumed to be overlaid by the system, so the update has the last word.
     FileSys::VirtualDir layered_base = base_romfs;
-    if (const char* mode = std::getenv("EGL_MERGE_DLC"); mode != nullptr && mode[0] == '3') {
+    if (const char* mode = std::getenv("EGL_MERGE_DLC");
+        mode != nullptr && (mode[0] == '3' || mode[0] == '4')) {
         const auto& packages = nup->GetPackages();
         for (std::size_t i = 0; i < packages.size(); ++i) {
             if (packages[i].kind != NupContainer::PackageKind::Addon) {
@@ -281,6 +317,26 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     auto merged = FileSys::NupContainer::MergeShadowDirs(layered_base, update_romfs);
     if (merged == nullptr) {
         return ResultStatus::ErrorNoRomFS;
+    }
+    // Mode 4 on top of 3: the add-ons' Switch 2 files also stand in for the Switch 1 files of the
+    // same name, which win over everything else.
+    if (const char* mode = std::getenv("EGL_MERGE_DLC"); mode != nullptr && mode[0] == '4') {
+        const auto& packages = nup->GetPackages();
+        for (std::size_t i = 0; i < packages.size(); ++i) {
+            if (packages[i].kind != NupContainer::PackageKind::Addon) {
+                continue;
+            }
+            const auto addon_dir = nup->GetRomFSDir(i);
+            if (addon_dir == nullptr) {
+                continue;
+            }
+            const auto renamed = RenameOunceFiles(addon_dir);
+            if (auto with_ounce = FileSys::NupContainer::MergeShadowDirs(merged, renamed)) {
+                LOG_INFO(Loader, "Renamed Switch 2 files of NUP add-on {:016X} onto Switch 1 names",
+                         packages[i].title_id);
+                merged = std::move(with_ounce);
+            }
+        }
     }
     // Experiment (EGL_MERGE_DLC=1): also lay the add-on RomFS trees over the program RomFS, for
     // games that find their add-on assets by path instead of through the AoC service.
