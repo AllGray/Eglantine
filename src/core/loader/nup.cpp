@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -257,56 +259,113 @@ ResultStatus AppLoader_NUP::VerifyIntegrity(
 
 namespace {
 
-/// Experiment (EGL_MERGE_DLC=4): a copy of `dir` holding only the Switch 2 files (".Nin_Ounce_NVN2.")
-/// under the Switch 1 name (".Nin_NX_NVN.") that the program asks for.
-FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir) {
-    constexpr std::string_view from = ".Nin_Ounce_NVN2.";
-    constexpr std::string_view to = ".Nin_NX_NVN.";
-    // EGL_RENAME_FILTER=a,b: only Switch 2 files whose name contains one of the comma-separated
-    // words are renamed. EGL_DLC_WINS=c,d: files of the add-on with other names (no Switch 2 suffix)
-    // that contain one of these words are kept as they are, so they replace the program's own.
-    const auto parse_list = [](const char* variable) {
-        std::vector<std::string> out;
-        if (const char* value = std::getenv(variable)) {
-            std::string_view rest{value};
-            while (!rest.empty()) {
-                const auto comma = rest.find(',');
-                const auto word = rest.substr(0, comma);
-                if (!word.empty()) {
-                    out.emplace_back(word);
-                }
-                rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+/// Experiment settings for the add-on (DLC) RomFS, read at every launch so they can be changed
+/// without a rebuild. ~/.config/eden/nup_rules.txt (or the file EGL_NUP_RULES names), one rule per
+/// line, '#' starts a comment:
+///   mode 1|2|3|4   1: add-on files replace the program's; 2: program files win; 3: base < add-on <
+///                  update; 4: mode 3 plus the renaming below
+///   rename WORD    mode 4: a Switch 2 file (".Nin_Ounce_NVN2.") whose name contains WORD is
+///                  renamed onto its Switch 1 name (".Nin_NX_NVN.") and wins over everything
+///   dlcwins WORD   mode 4: an add-on file with another name that contains WORD replaces the
+///                  program's file of that name
+/// Without a file, EGL_MERGE_DLC (mode), EGL_RENAME_FILTER and EGL_DLC_WINS (comma lists) apply.
+struct NupRules {
+    char mode = '0';
+    std::vector<std::string> rename;
+    std::vector<std::string> dlc_wins;
+};
+
+std::vector<std::string> SplitWords(const char* value) {
+    std::vector<std::string> out;
+    if (value == nullptr) {
+        return out;
+    }
+    std::string_view rest{value};
+    while (!rest.empty()) {
+        const auto comma = rest.find(',');
+        const auto word = rest.substr(0, comma);
+        if (!word.empty()) {
+            out.emplace_back(word);
+        }
+        rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+    }
+    return out;
+}
+
+NupRules LoadNupRules() {
+    NupRules rules;
+    std::string path;
+    if (const char* value = std::getenv("EGL_NUP_RULES")) {
+        path = value;
+    } else if (const char* home = std::getenv("HOME")) {
+        path = std::string{home} + "/.config/eden/nup_rules.txt";
+    }
+    std::ifstream file{path};
+    if (!path.empty() && file.is_open()) {
+        std::string line;
+        while (std::getline(file, line)) {
+            if (const auto hash = line.find('#'); hash != std::string::npos) {
+                line.erase(hash);
+            }
+            std::istringstream words{line};
+            std::string key;
+            std::string value;
+            if (!(words >> key >> value)) {
+                continue;
+            }
+            if (key == "mode") {
+                rules.mode = value[0];
+            } else if (key == "rename") {
+                rules.rename.push_back(value);
+            } else if (key == "dlcwins") {
+                rules.dlc_wins.push_back(value);
             }
         }
-        return out;
-    };
-    static const std::vector<std::string> filters = parse_list("EGL_RENAME_FILTER");
-    static const std::vector<std::string> dlc_wins = parse_list("EGL_DLC_WINS");
+        LOG_INFO(Loader, "NUP rules from {}: mode {}, {} rename, {} dlcwins", path, rules.mode,
+                 rules.rename.size(), rules.dlc_wins.size());
+        return rules;
+    }
+    if (const char* mode = std::getenv("EGL_MERGE_DLC"); mode != nullptr && mode[0] != '\0') {
+        rules.mode = mode[0];
+    }
+    rules.rename = SplitWords(std::getenv("EGL_RENAME_FILTER"));
+    rules.dlc_wins = SplitWords(std::getenv("EGL_DLC_WINS"));
+    return rules;
+}
+
+bool ContainsAny(const std::string& name, const std::vector<std::string>& words) {
+    return std::any_of(words.begin(), words.end(), [&name](const std::string& word) {
+        return name.find(word) != std::string::npos;
+    });
+}
+
+/// A copy of `dir` holding only the add-on's Switch 2 files (".Nin_Ounce_NVN2.") under their
+/// Switch 1 name (".Nin_NX_NVN.") and the files `dlc_wins` names. A rename list that is empty
+/// renames every Switch 2 file.
+FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir,
+                                     const std::vector<std::string>& rename,
+                                     const std::vector<std::string>& dlc_wins) {
+    constexpr std::string_view from = ".Nin_Ounce_NVN2.";
+    constexpr std::string_view to = ".Nin_NX_NVN.";
     std::vector<FileSys::VirtualFile> files;
     std::vector<FileSys::VirtualDir> dirs;
     for (const auto& file : dir->GetFiles()) {
         std::string name = file->GetName();
         const auto pos = name.find(from);
         if (pos == std::string::npos) {
-            if (!dlc_wins.empty() &&
-                std::any_of(dlc_wins.begin(), dlc_wins.end(), [&name](const std::string& word) {
-                    return name.find(word) != std::string::npos;
-                })) {
+            if (!dlc_wins.empty() && ContainsAny(name, dlc_wins)) {
                 files.push_back(file);
             }
             continue;
         }
-        if (!filters.empty() &&
-            std::none_of(filters.begin(), filters.end(), [&name](const std::string& word) {
-                return name.find(word) != std::string::npos;
-            })) {
+        if (!rename.empty() && !ContainsAny(name, rename)) {
             continue;
         }
         name.replace(pos, from.size(), to);
         files.push_back(std::make_shared<FileSys::OffsetVfsFile>(file, file->GetSize(), 0, name));
     }
     for (const auto& sub : dir->GetSubdirectories()) {
-        auto renamed = RenameOunceFiles(sub);
+        auto renamed = RenameOunceFiles(sub, rename, dlc_wins);
         if (!renamed->GetFiles().empty() || !renamed->GetSubdirectories().empty()) {
             dirs.push_back(std::move(renamed));
         }
@@ -323,13 +382,13 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     const auto update_index = nup->FindBestUpdatePackage();
     const auto update_romfs =
         update_index ? nup->GetRomFSDir(*update_index) : FileSys::VirtualDir{};
+    const NupRules rules = LoadNupRules();
     // A standalone update carries the complete merged tree; a base+update pair
     // overlays the update onto the base (SPEC §4.1.4).
     // Experiment (EGL_MERGE_DLC=3): layer the program as base < add-ons < update, the way an
     // upgrade pack is assumed to be overlaid by the system, so the update has the last word.
     FileSys::VirtualDir layered_base = base_romfs;
-    if (const char* mode = std::getenv("EGL_MERGE_DLC");
-        mode != nullptr && (mode[0] == '3' || mode[0] == '4')) {
+    if (rules.mode == '3' || rules.mode == '4') {
         const auto& packages = nup->GetPackages();
         for (std::size_t i = 0; i < packages.size(); ++i) {
             if (packages[i].kind != NupContainer::PackageKind::Addon) {
@@ -352,7 +411,7 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     }
     // Mode 4 on top of 3: the add-ons' Switch 2 files also stand in for the Switch 1 files of the
     // same name, which win over everything else.
-    if (const char* mode = std::getenv("EGL_MERGE_DLC"); mode != nullptr && mode[0] == '4') {
+    if (rules.mode == '4') {
         const auto& packages = nup->GetPackages();
         for (std::size_t i = 0; i < packages.size(); ++i) {
             if (packages[i].kind != NupContainer::PackageKind::Addon) {
@@ -362,7 +421,7 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
             if (addon_dir == nullptr) {
                 continue;
             }
-            const auto renamed = RenameOunceFiles(addon_dir);
+            const auto renamed = RenameOunceFiles(addon_dir, rules.rename, rules.dlc_wins);
             if (auto with_ounce = FileSys::NupContainer::MergeShadowDirs(merged, renamed)) {
                 LOG_INFO(Loader, "Renamed Switch 2 files of NUP add-on {:016X} onto Switch 1 names",
                          packages[i].title_id);
@@ -372,11 +431,10 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
     }
     // Experiment (EGL_MERGE_DLC=1): also lay the add-on RomFS trees over the program RomFS, for
     // games that find their add-on assets by path instead of through the AoC service.
-    if (const char* merge_dlc = std::getenv("EGL_MERGE_DLC");
-        merge_dlc != nullptr && (merge_dlc[0] == '1' || merge_dlc[0] == '2')) {
+    if (rules.mode == '1' || rules.mode == '2') {
         // 1: add-on files replace program files with the same path; 2: program files win and the
         // add-on only contributes paths the program does not have.
-        const bool program_wins = merge_dlc[0] == '2';
+        const bool program_wins = rules.mode == '2';
         const auto& packages = nup->GetPackages();
         for (std::size_t i = 0; i < packages.size(); ++i) {
             if (packages[i].kind != NupContainer::PackageKind::Addon) {
