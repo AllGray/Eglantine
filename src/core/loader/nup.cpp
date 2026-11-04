@@ -262,10 +262,12 @@ namespace {
 FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir) {
     constexpr std::string_view from = ".Nin_Ounce_NVN2.";
     constexpr std::string_view to = ".Nin_NX_NVN.";
-    // EGL_RENAME_FILTER=a,b: only files whose name contains one of the comma-separated words.
-    static const std::vector<std::string> filters = [] {
+    // EGL_RENAME_FILTER=a,b: only Switch 2 files whose name contains one of the comma-separated
+    // words are renamed. EGL_DLC_WINS=c,d: files of the add-on with other names (no Switch 2 suffix)
+    // that contain one of these words are kept as they are, so they replace the program's own.
+    const auto parse_list = [](const char* variable) {
         std::vector<std::string> out;
-        if (const char* value = std::getenv("EGL_RENAME_FILTER")) {
+        if (const char* value = std::getenv(variable)) {
             std::string_view rest{value};
             while (!rest.empty()) {
                 const auto comma = rest.find(',');
@@ -277,13 +279,21 @@ FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir) {
             }
         }
         return out;
-    }();
+    };
+    static const std::vector<std::string> filters = parse_list("EGL_RENAME_FILTER");
+    static const std::vector<std::string> dlc_wins = parse_list("EGL_DLC_WINS");
     std::vector<FileSys::VirtualFile> files;
     std::vector<FileSys::VirtualDir> dirs;
     for (const auto& file : dir->GetFiles()) {
         std::string name = file->GetName();
         const auto pos = name.find(from);
         if (pos == std::string::npos) {
+            if (!dlc_wins.empty() &&
+                std::any_of(dlc_wins.begin(), dlc_wins.end(), [&name](const std::string& word) {
+                    return name.find(word) != std::string::npos;
+                })) {
+                files.push_back(file);
+            }
             continue;
         }
         if (!filters.empty() &&
