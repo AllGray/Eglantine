@@ -812,7 +812,16 @@ void HostMemory::HintCold(size_t physical_offset, size_t length,
         // Unlocking pages that are not locked takes them out of the working set.
         VirtualUnlock(address, length);
 #elif defined(__linux__) && defined(MADV_PAGEOUT)
-        madvise(address, length, MADV_PAGEOUT);
+        // MADV_PAGEOUT swaps the pages out at once. With zram swap (Steam Deck) that only
+        // compresses them: it burns a whole core on the ColdHint worker and the pages fault straight
+        // back in as hitches. Opt in with EDEN_COLD_HINT=1.
+        static const bool enabled = [] {
+            const char* value = std::getenv("EDEN_COLD_HINT");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (enabled) {
+            madvise(address, length, MADV_PAGEOUT);
+        }
 #else
         static_cast<void>(address);
 #endif
