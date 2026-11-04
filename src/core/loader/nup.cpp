@@ -262,12 +262,34 @@ namespace {
 FileSys::VirtualDir RenameOunceFiles(const FileSys::VirtualDir& dir) {
     constexpr std::string_view from = ".Nin_Ounce_NVN2.";
     constexpr std::string_view to = ".Nin_NX_NVN.";
+    // EGL_RENAME_FILTER=a,b: only files whose name contains one of the comma-separated words.
+    static const std::vector<std::string> filters = [] {
+        std::vector<std::string> out;
+        if (const char* value = std::getenv("EGL_RENAME_FILTER")) {
+            std::string_view rest{value};
+            while (!rest.empty()) {
+                const auto comma = rest.find(',');
+                const auto word = rest.substr(0, comma);
+                if (!word.empty()) {
+                    out.emplace_back(word);
+                }
+                rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+            }
+        }
+        return out;
+    }();
     std::vector<FileSys::VirtualFile> files;
     std::vector<FileSys::VirtualDir> dirs;
     for (const auto& file : dir->GetFiles()) {
         std::string name = file->GetName();
         const auto pos = name.find(from);
         if (pos == std::string::npos) {
+            continue;
+        }
+        if (!filters.empty() &&
+            std::none_of(filters.begin(), filters.end(), [&name](const std::string& word) {
+                return name.find(word) != std::string::npos;
+            })) {
             continue;
         }
         name.replace(pos, from.size(), to);
