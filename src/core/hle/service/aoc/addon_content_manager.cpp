@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <numeric>
 #include <vector>
 
@@ -81,7 +82,7 @@ IAddOnContentManager::IAddOnContentManager(Core::System& system_)
         {11, D<&IAddOnContentManager::NotifyMountAddOnContent>, "NotifyMountAddOnContent"},
         {12, D<&IAddOnContentManager::NotifyUnmountAddOnContent>, "NotifyUnmountAddOnContent"},
         {13, &IAddOnContentManager::StubReplyZeroed, "IsAddOnContentMountedForDebug"},
-        {50, D<&IAddOnContentManager::CheckAddOnContentMountStatus>, "CheckAddOnContentMountStatus"},
+        {50, &IAddOnContentManager::CheckAddOnContentMountStatus, "CheckAddOnContentMountStatus"},
         {100, D<&IAddOnContentManager::CreateEcPurchasedEventManager>, "CreateEcPurchasedEventManager"},
         {101, D<&IAddOnContentManager::CreatePermanentEcPurchasedEventManager>, "CreatePermanentEcPurchasedEventManager"},
         {110, &IAddOnContentManager::StubReplyInterface, "CreateContentsServiceManager"},
@@ -211,11 +212,32 @@ Result IAddOnContentManager::NotifyUnmountAddOnContent() {
     R_SUCCEED();
 }
 
-Result IAddOnContentManager::CheckAddOnContentMountStatus() {
-    LOG_WARNING(Service_AOC, "(STUBBED) called, NUP add-ons registered={}",
-                FileSys::NupContainer::GetAddonTitleIds().size());
+void IAddOnContentManager::CheckAddOnContentMountStatus(HLERequestContext& ctx) {
+    // Experiment: the real signature is unknown. Log the raw request and let environment
+    // variables pick the reply shape (EGL_AOC50_WORDS extra reply words holding EGL_AOC50_VALUE,
+    // EGL_AOC50_RESULT a raw result code).
+    const auto env_u32 = [](const char* name, u32 fallback) {
+        const char* value = std::getenv(name);
+        return value != nullptr ? static_cast<u32>(std::strtoul(value, nullptr, 0)) : fallback;
+    };
+    const u32 extra_words = env_u32("EGL_AOC50_WORDS", 0);
+    const u32 extra_value = env_u32("EGL_AOC50_VALUE", 0);
+    const u32 result_code = env_u32("EGL_AOC50_RESULT", 0);
 
-    R_SUCCEED();
+    const u32* cmd = ctx.CommandBuffer();
+    LOG_WARNING(Service_AOC,
+                "CheckAddOnContentMountStatus: pid={} payload_offset={} registered={} "
+                "words={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} -> "
+                "reply words={} value={} result={}",
+                ctx.GetPID(), ctx.GetDataPayloadOffset(),
+                FileSys::NupContainer::GetAddonTitleIds().size(), cmd[0], cmd[1], cmd[2], cmd[3],
+                cmd[4], cmd[5], cmd[6], cmd[7], extra_words, extra_value, result_code);
+
+    IPC::ResponseBuilder rb{ctx, 2 + extra_words};
+    rb.Push(Result{result_code});
+    for (u32 i = 0; i < extra_words; ++i) {
+        rb.Push<u32>(extra_value);
+    }
 }
 
 Result IAddOnContentManager::CreateEcPurchasedEventManager(

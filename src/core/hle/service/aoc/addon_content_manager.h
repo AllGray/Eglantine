@@ -37,7 +37,7 @@ public:
         OutCopyHandle<Kernel::KReadableEvent> out_event, ClientProcessId process_id);
     Result NotifyMountAddOnContent();
     Result NotifyUnmountAddOnContent();
-    Result CheckAddOnContentMountStatus();
+    void CheckAddOnContentMountStatus(HLERequestContext& ctx);
     Result CreateEcPurchasedEventManager(OutInterface<IPurchaseEventManager> out_interface);
     Result CreatePermanentEcPurchasedEventManager(
         OutInterface<IPurchaseEventManager> out_interface);
