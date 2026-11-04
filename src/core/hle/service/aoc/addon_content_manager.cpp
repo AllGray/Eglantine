@@ -102,7 +102,7 @@ IAddOnContentManager::~IAddOnContentManager() {
 }
 
 Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcessId process_id) {
-    LOG_DEBUG(Service_AOC, "called. process_id={}", process_id.pid);
+    LOG_INFO(Service_AOC, "called. process_id={}", process_id.pid);
 
     // The list is rebuilt on demand: the service starts before a NUP container registers its
     // add-on packages.
@@ -126,7 +126,7 @@ Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcess
 Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
                                               OutBuffer<BufferAttr_HipcMapAlias> out_addons,
                                               u32 offset, u32 count, ClientProcessId process_id) {
-    LOG_DEBUG(Service_AOC, "called with offset={}, count={}, process_id={}", offset, count,
+    LOG_INFO(Service_AOC, "called with offset={}, count={}, process_id={}", offset, count,
               process_id.pid);
 
     add_on_content = AccumulateAOCTitleIDs(system);
@@ -157,7 +157,7 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
 
 Result IAddOnContentManager::GetAddOnContentBaseId(Out<u64> out_title_id,
                                                    ClientProcessId process_id) {
-    LOG_DEBUG(Service_AOC, "called. process_id={}", process_id.pid);
+    LOG_INFO(Service_AOC, "called. process_id={}", process_id.pid);
 
     const auto title_id = system.ResolveCallerProgramId(*process_id);
     const FileSys::PatchManager pm{title_id, system.GetFileSystemController(),
@@ -212,7 +212,8 @@ Result IAddOnContentManager::NotifyUnmountAddOnContent() {
 }
 
 Result IAddOnContentManager::CheckAddOnContentMountStatus() {
-    LOG_WARNING(Service_AOC, "(STUBBED) called");
+    LOG_WARNING(Service_AOC, "(STUBBED) called, NUP add-ons registered={}",
+                FileSys::NupContainer::GetAddonTitleIds().size());
 
     R_SUCCEED();
 }
