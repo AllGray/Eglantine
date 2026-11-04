@@ -258,7 +258,27 @@ ResultStatus AppLoader_NUP::ReadRomFS(FileSys::VirtualFile& out_file) {
         update_index ? nup->GetRomFSDir(*update_index) : FileSys::VirtualDir{};
     // A standalone update carries the complete merged tree; a base+update pair
     // overlays the update onto the base (SPEC §4.1.4).
-    auto merged = FileSys::NupContainer::MergeShadowDirs(base_romfs, update_romfs);
+    // Experiment (EGL_MERGE_DLC=3): layer the program as base < add-ons < update, the way an
+    // upgrade pack is assumed to be overlaid by the system, so the update has the last word.
+    FileSys::VirtualDir layered_base = base_romfs;
+    if (const char* mode = std::getenv("EGL_MERGE_DLC"); mode != nullptr && mode[0] == '3') {
+        const auto& packages = nup->GetPackages();
+        for (std::size_t i = 0; i < packages.size(); ++i) {
+            if (packages[i].kind != NupContainer::PackageKind::Addon) {
+                continue;
+            }
+            const auto addon_dir = nup->GetRomFSDir(i);
+            if (addon_dir == nullptr) {
+                continue;
+            }
+            if (auto with_addon = FileSys::NupContainer::MergeShadowDirs(layered_base, addon_dir)) {
+                LOG_INFO(Loader, "Layered NUP add-on {:016X} between base and update",
+                         packages[i].title_id);
+                layered_base = std::move(with_addon);
+            }
+        }
+    }
+    auto merged = FileSys::NupContainer::MergeShadowDirs(layered_base, update_romfs);
     if (merged == nullptr) {
         return ResultStatus::ErrorNoRomFS;
     }
