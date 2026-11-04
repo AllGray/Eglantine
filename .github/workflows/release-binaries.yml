@@ -343,7 +343,7 @@ jobs:
           set -euo pipefail
           test -x build/release/bin/eglantine
           test -x build/release/bin/eden-cli
-          strip build/release/bin/eglantine build/release/bin/eden-cli
+          # aoc-nup test branch: keep the symbols so perf can name functions on the Steam Deck.
           tar -czf "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz" \
             -C build/release/bin eglantine eden-cli
           ls -la "eglantine-${GITHUB_SHA}-${{ matrix.platform }}.tar.gz"
@@ -370,6 +370,7 @@ jobs:
           icon="$RUNNER_TEMP/dev.eglantine.eglantine.png"
           cp dist/Eglantine.png "$icon"
           export APPIMAGE_EXTRACT_AND_RUN=1
+          export NO_STRIP=1
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
           # Include Wayland platform plugins and their graphics/shell integrations.
           export EXTRA_QT_MODULES=waylandcompositor
