@@ -23,6 +23,7 @@
 #include "core/file_sys/fs_directory.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
@@ -512,6 +513,13 @@ Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
                                         FileSys::StorageId storage_id, u32 unknown, u64 title_id) {
     LOG_DEBUG(Service_FS, "called with storage_id={:02X}, unknown={:08X}, title_id={:016X}",
               storage_id, unknown, title_id);
+
+    // Add-on content shipped inside a NUP container is not in the content provider.
+    if (auto addon_romfs = FileSys::NupContainer::FindAddonRomFS(title_id)) {
+        LOG_INFO(Service_FS, "Opening NUP add-on content {:016X}", title_id);
+        *out_interface = std::make_shared<IStorage>(system, std::move(addon_romfs));
+        R_SUCCEED();
+    }
 
     auto data = romfs_controller->OpenRomFS(title_id, storage_id, FileSys::ContentRecordType::Data);
 

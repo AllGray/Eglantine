@@ -858,4 +858,43 @@ Loader::ResultStatus NupContainer::VerifyIntegrity(
     return Loader::ResultStatus::Success;
 }
 
+namespace {
+
+std::mutex addon_registry_mutex;
+
+std::unordered_map<u64, VirtualFile>& AddonRegistry() {
+    static std::unordered_map<u64, VirtualFile> registry;
+    return registry;
+}
+
+} // namespace
+
+void NupContainer::RegisterAddonRomFS(u64 title_id, VirtualFile romfs) {
+    std::scoped_lock lock{addon_registry_mutex};
+    AddonRegistry()[title_id] = std::move(romfs);
+}
+
+VirtualFile NupContainer::FindAddonRomFS(u64 title_id) {
+    std::scoped_lock lock{addon_registry_mutex};
+    const auto& registry = AddonRegistry();
+    const auto it = registry.find(title_id);
+    return it == registry.end() ? nullptr : it->second;
+}
+
+std::vector<u64> NupContainer::GetAddonTitleIds() {
+    std::scoped_lock lock{addon_registry_mutex};
+    std::vector<u64> ids;
+    ids.reserve(AddonRegistry().size());
+    for (const auto& entry : AddonRegistry()) {
+        ids.push_back(entry.first);
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+void NupContainer::ClearAddonRomFS() {
+    std::scoped_lock lock{addon_registry_mutex};
+    AddonRegistry().clear();
+}
+
 } // namespace FileSys

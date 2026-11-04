@@ -175,10 +175,7 @@ AppLoader_NUP::AppLoader_NUP(FileSys::VirtualFile file_)
                                                       NupContainer::PackageKind::Addon;
                                            });
     if (addon_count > 0) {
-        LOG_WARNING(Loader,
-                    "NUP container has {} add-on content package(s); AoC mounting is not "
-                    "supported yet",
-                    addon_count);
+        LOG_INFO(Loader, "NUP container has {} add-on content package(s)", addon_count);
     }
 }
 
@@ -209,8 +206,39 @@ AppLoader::LoadResult AppLoader_NUP::Load(Kernel::KProcess& process, Core::Syste
         std::make_shared<FileSys::RomFSFactory>(*this, system.GetContentProvider(),
                                                 system.GetFileSystemController()));
 
+    RegisterAddonContent();
+
     is_loaded = true;
     return result;
+}
+
+void AppLoader_NUP::RegisterAddonContent() {
+    // Add-on packages never reach the content provider, so expose their RomFS to the AoC and
+    // filesystem services through a registry. Only Load() calls this: the constructor also runs
+    // while the game list is scanned and must not replace the registry of a running game.
+    NupContainer::ClearAddonRomFS();
+
+    const auto& packages = nup->GetPackages();
+    for (std::size_t i = 0; i < packages.size(); ++i) {
+        const auto& package = packages[i];
+        if (package.kind != NupContainer::PackageKind::Addon) {
+            continue;
+        }
+        const auto addon_romfs = nup->GetRomFSDir(i);
+        if (addon_romfs == nullptr) {
+            LOG_WARNING(Loader, "NUP add-on package {} ({:016X}) has no RomFS; skipping", i,
+                        package.title_id);
+            continue;
+        }
+        auto image = FileSys::CreateRomFS(addon_romfs);
+        if (image == nullptr) {
+            LOG_WARNING(Loader, "Could not build a RomFS image for NUP add-on package {} ({:016X})",
+                        i, package.title_id);
+            continue;
+        }
+        NupContainer::RegisterAddonRomFS(package.title_id, std::move(image));
+        LOG_INFO(Loader, "Registered NUP add-on content {:016X} (package {})", package.title_id, i);
+    }
 }
 
 ResultStatus AppLoader_NUP::VerifyIntegrity(

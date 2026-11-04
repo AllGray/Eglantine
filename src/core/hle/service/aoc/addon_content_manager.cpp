@@ -15,6 +15,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/nup_container.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/hle/kernel/k_event.h"
@@ -51,6 +52,13 @@ static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
                        Loader::ResultStatus::Success;
             }),
         add_on_content.end());
+
+    // Add-on packages inside a loaded NUP container are not in the content provider.
+    for (const u64 tid : FileSys::NupContainer::GetAddonTitleIds()) {
+        if (std::find(add_on_content.begin(), add_on_content.end(), tid) == add_on_content.end()) {
+            add_on_content.push_back(tid);
+        }
+    }
     return add_on_content;
 }
 
@@ -96,6 +104,10 @@ IAddOnContentManager::~IAddOnContentManager() {
 Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcessId process_id) {
     LOG_DEBUG(Service_AOC, "called. process_id={}", process_id.pid);
 
+    // The list is rebuilt on demand: the service starts before a NUP container registers its
+    // add-on packages.
+    add_on_content = AccumulateAOCTitleIDs(system);
+
     const auto current = GetCallerBaseTitleID(system, process_id);
 
     const auto& disabled = Settings::values.disabled_addons[current];
@@ -116,6 +128,8 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
                                               u32 offset, u32 count, ClientProcessId process_id) {
     LOG_DEBUG(Service_AOC, "called with offset={}, count={}, process_id={}", offset, count,
               process_id.pid);
+
+    add_on_content = AccumulateAOCTitleIDs(system);
 
     const auto current = GetCallerBaseTitleID(system, process_id);
 

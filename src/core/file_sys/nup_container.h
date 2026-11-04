@@ -131,6 +131,14 @@ public:
     /// Recursively merges overlay into a copy of base; overlay paths win.
     static VirtualDir MergeShadowDirs(const VirtualDir& base, const VirtualDir& overlay);
 
+    /// Add-on (DLC) RomFS images of the NUP that is currently loaded, keyed by add-on title id.
+    /// Add-on packages never reach the content provider, so the AoC and filesystem services
+    /// consult this registry instead.
+    static void RegisterAddonRomFS(u64 title_id, VirtualFile romfs);
+    static VirtualFile FindAddonRomFS(u64 title_id);
+    static std::vector<u64> GetAddonTitleIds();
+    static void ClearAddonRomFS();
+
     /// Zstd members larger than half of `memory_cache_cap` are decompressed to a temporary file
     /// in `spill_dir` (the cache directory by default) instead of being held in memory.
     explicit NupContainer(VirtualFile file_,
