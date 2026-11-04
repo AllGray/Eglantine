@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <cstdlib>
 #include <span>
 #include <vector>
 
@@ -180,12 +181,18 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     // Mario Kart World selects a 1- or 2-vblank frame mode in its main loop. Force its native
     // 30 FPS mode, or let it choose dynamically using the whole frame time (CPU + GPU wait).
     // Match the instruction sequence instead of relying on a title-version-specific address.
-    const bool mkw_dynamic = Settings::values.mkw_dynamic_fps.GetValue();
+    // EGL_MKW_MODE=<n>: force the game's frame mode to n vblanks per frame (3 = 20 FPS), instead of
+    // the dynamic mode (0) or the 30 FPS mode (2). Experiment.
+    const char* const mkw_mode_env = std::getenv("EGL_MKW_MODE");
+    const u32 mkw_forced_mode =
+        mkw_mode_env != nullptr ? static_cast<u32>(std::strtoul(mkw_mode_env, nullptr, 10)) : 0U;
+    const bool mkw_forced = mkw_forced_mode != 0;
+    const bool mkw_dynamic = Settings::values.mkw_dynamic_fps.GetValue() && !mkw_forced;
     bool mkw_dynamic_fps_patch_applied = false;
-    if ((mkw_dynamic || Settings::values.mkw_30fps.GetValue()) && name == "main" &&
+    if ((mkw_dynamic || mkw_forced || Settings::values.mkw_30fps.GetValue()) && name == "main" &&
         process.GetProgramId() == Settings::MarioKartWorldProgramId) {
         constexpr u32 ModeLoadInsn = 0xB9421268; // ldr w8, [x19, #0x210]
-        const u32 mode = mkw_dynamic ? 0U : 2U;
+        const u32 mode = mkw_forced ? mkw_forced_mode : (mkw_dynamic ? 0U : 2U);
         const u32 mode_instruction = 0x52800008U | (mode << 5); // mov w8, #mode
         const auto& text = nso_header.segments[0];
         u8* const code = codeset.memory.data() + module_start + text.location;
@@ -233,7 +240,7 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                 mkw_dynamic_fps_patch_applied = true;
             }
             LOG_INFO(Loader, "Mario Kart World: {} FPS mode enabled (main+{:#x})",
-                     mkw_dynamic ? "dynamic" : "30",
+                     mkw_dynamic ? "dynamic" : (mkw_forced ? "forced" : "30"),
                      text.location + mode_site * sizeof(u32));
         } else {
             LOG_WARNING(Loader,
